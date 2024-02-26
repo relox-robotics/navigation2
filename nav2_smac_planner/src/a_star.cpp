@@ -121,7 +121,9 @@ template<>
 void AStarAlgorithm<Node2D>::setStart(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy)
 {
   if (dim_3 != 0) {
     throw std::runtime_error("Node type Node2D cannot be given non-zero starting dim 3.");
@@ -133,13 +135,15 @@ template<typename NodeT>
 void AStarAlgorithm<NodeT>::setStart(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy)
 {
   _start = addToGraph(NodeT::getIndex(mx, my, dim_3));
   _start->setPose(
     Coordinates(
-      static_cast<float>(mx),
-      static_cast<float>(my),
+      static_cast<float>(cmx),
+      static_cast<float>(cmy),
       static_cast<float>(dim_3)));
 }
 
@@ -147,7 +151,9 @@ template<>
 void AStarAlgorithm<Node2D>::setGoal(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy)
 {
   if (dim_3 != 0) {
     throw std::runtime_error("Node type Node2D cannot be given non-zero goal dim 3.");
@@ -161,13 +167,15 @@ template<typename NodeT>
 void AStarAlgorithm<NodeT>::setGoal(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy)
 {
   _goal = addToGraph(NodeT::getIndex(mx, my, dim_3));
 
   typename NodeT::Coordinates goal_coords(
-    static_cast<float>(mx),
-    static_cast<float>(my),
+    static_cast<float>(cmx),
+    static_cast<float>(cmy),
     static_cast<float>(dim_3));
 
   if (!_search_info.cache_obstacle_heuristic || goal_coords != _goal_coordinates) {
@@ -329,6 +337,10 @@ bool AStarAlgorithm<Node2D>::backtracePath(NodePtr node, CoordinateVector & path
     current_node = current_node->parent;
   }
 
+  path.push_back(
+    Node2D::getCoords(
+      current_node->getIndex(), getSizeX(), getSizeDim3()));
+
   return path.size() > 0;
 }
 
@@ -345,6 +357,8 @@ bool AStarAlgorithm<NodeT>::backtracePath(NodePtr node, CoordinateVector & path)
     path.push_back(current_node->pose);
     current_node = current_node->parent;
   }
+
+  path.push_back(current_node->pose);
 
   return path.size() > 0;
 }

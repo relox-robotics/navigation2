@@ -46,6 +46,17 @@ inline geometry_msgs::msg::Pose getWorldCoords(
   return msg;
 }
 
+inline geometry_msgs::msg::Pose getMapCoords(
+  const float & wx, const float & wy, const nav2_costmap_2d::Costmap2D * costmap)
+{
+  geometry_msgs::msg::Pose msg;
+  msg.position.x =
+    (wx - static_cast<float>(costmap->getOriginX())) / costmap->getResolution() - 0.5;
+  msg.position.y =
+    (wy - static_cast<float>(costmap->getOriginY())) / costmap->getResolution() - 0.5;
+  return msg;
+}
+
 /**
 * @brief Create quaternion from A* coord bins
 * @param theta continuous bin coordinates angle

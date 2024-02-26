@@ -137,7 +137,9 @@ public:
   void setGoal(
     const unsigned int & mx,
     const unsigned int & my,
-    const unsigned int & dim_3);
+    const unsigned int & dim_3,
+    const double & cmx,
+    const double & cmy);
 
   /**
    * @brief Set the starting pose for planning, as a node index
@@ -148,7 +150,9 @@ public:
   void setStart(
     const unsigned int & mx,
     const unsigned int & my,
-    const unsigned int & dim_3);
+    const unsigned int & dim_3,
+    const double & cmx,
+    const double & cmy);
 
   /**
    * @brief Get maximum number of iterations to plan

@@ -271,7 +271,10 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
     orientation_bin -= static_cast<float>(_angle_quantizations);
   }
   unsigned int orientation_bin_id = static_cast<unsigned int>(floor(orientation_bin));
-  _a_star->setStart(mx, my, orientation_bin_id);
+
+  auto mapPose = getMapCoords(start.pose.position.x, start.pose.position.y, costmap);
+
+  _a_star->setStart(mx, my, orientation_bin_id, mapPose.position.x, mapPose.position.y);
 
   // Set goal point, in A* bin search coordinates
   costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, mx, my);
@@ -284,7 +287,10 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
     orientation_bin -= static_cast<float>(_angle_quantizations);
   }
   orientation_bin_id = static_cast<unsigned int>(floor(orientation_bin));
-  _a_star->setGoal(mx, my, orientation_bin_id);
+  
+  mapPose = getMapCoords(goal.pose.position.x, goal.pose.position.y, costmap);
+
+  _a_star->setGoal(mx, my, orientation_bin_id, mapPose.position.x, mapPose.position.y);
 
   // Setup message
   nav_msgs::msg::Path plan;

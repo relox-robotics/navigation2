@@ -15,6 +15,7 @@
 #ifndef NAV2_CONTROLLER__NAV2_CONTROLLER_HPP_
 #define NAV2_CONTROLLER__NAV2_CONTROLLER_HPP_
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include <memory>
 #include <string>
 #include <thread>
@@ -34,6 +35,7 @@
 #include "nav2_util/robot_utils.hpp"
 #include "pluginlib/class_loader.hpp"
 #include "pluginlib/class_list_macros.hpp"
+#include "relox_msgs/msg/safety_status.hpp"
 
 namespace nav2_controller
 {
@@ -208,6 +210,7 @@ protected:
   std::unique_ptr<nav_2d_utils::OdomSubscriber> odom_sub_;
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr vel_publisher_;
   rclcpp::Subscription<nav2_msgs::msg::SpeedLimit>::SharedPtr speed_limit_sub_;
+  rclcpp::Subscription<relox_msgs::msg::SafetyStatus>::SharedPtr safety_status_sub_;
 
   // Progress Checker Plugin
   pluginlib::ClassLoader<nav2_core::ProgressChecker> progress_checker_loader_;
@@ -235,7 +238,13 @@ protected:
   std::vector<std::string> controller_types_;
   std::string controller_ids_concat_, current_controller_;
 
+  void init_diagnostic_updater_();
+  void check_rate(diagnostic_updater::DiagnosticStatusWrapper & status);
+  std::unique_ptr<diagnostic_updater::Updater> diagnostics_updater_;
+
   double controller_frequency_;
+  int controller_frequency_trigger_;
+  int CONTROLLER_FREQUENCY_TRIGGER_THRESHOLD = 20;
   double min_x_velocity_threshold_;
   double min_y_velocity_threshold_;
   double min_theta_velocity_threshold_;
@@ -251,12 +260,16 @@ protected:
   // Current path container
   nav_msgs::msg::Path current_path_;
 
+  bool is_safety_status_ok_{false};
+
 private:
   /**
     * @brief Callback for speed limiting messages
     * @param msg Shared pointer to nav2_msgs::msg::SpeedLimit
     */
   void speedLimitCallback(const nav2_msgs::msg::SpeedLimit::SharedPtr msg);
+
+  void safetyStatusCallback(const relox_msgs::msg::SafetyStatus::SharedPtr msg);
 };
 
 }  // namespace nav2_controller

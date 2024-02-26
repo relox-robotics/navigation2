@@ -108,13 +108,18 @@ public:
    */
   void setSpeedLimit(const double & speed_limit, const bool & percentage) override;
 
+  void resetSpeedRamp();
+
 protected:
   /**
    * @brief Transforms global plan into same frame as pose, clips far away poses and possibly prunes passed poses
    * @param pose pose to transform
    * @return Path in new frame
    */
-  nav_msgs::msg::Path transformGlobalPlan(const geometry_msgs::msg::PoseStamped & pose);
+  nav_msgs::msg::Path transformGlobalPlan(
+    const geometry_msgs::msg::PoseStamped & pose,
+    double & distance_to_goal
+    );
 
   /**
    * @brief Transform a pose to another frame.
@@ -209,8 +214,9 @@ protected:
    * @param pose_cost cost at this pose
    */
   void applyConstraints(
-    const double & dist_error, const double & lookahead_dist,
+    const double & distance_to_goal, const double & lookahead_dist,
     const double & curvature, const geometry_msgs::msg::Twist & speed,
+    const double & deviation_from_path,
     const double & pose_cost, double & linear_vel, double & sign);
 
   /**
@@ -220,6 +226,16 @@ protected:
    * @return Lookahead point
    */
   geometry_msgs::msg::PoseStamped getLookAheadPoint(const double &, const nav_msgs::msg::Path &);
+
+  /**
+   * @brief Get lookahead point
+   * @param lookahead_dist Optimal lookahead distance
+   * @param path Current global path
+   * @param deviation_from_path output
+   * @param overshoot_goal output
+   * @return Lookahead point
+   */
+  geometry_msgs::msg::PoseStamped getLookAheadPoint(const double &, const nav_msgs::msg::Path &, float &, bool &);
 
   /**
    * @brief checks for the cusp position
@@ -234,6 +250,15 @@ protected:
   nav2_costmap_2d::Costmap2D * costmap_;
   rclcpp::Logger logger_ {rclcpp::get_logger("RegulatedPurePursuitController")};
   rclcpp::Clock::SharedPtr clock_;
+
+  // These should be parameters eventually
+  const double MINIMUM_TURNING_RADIUS = 0.5;
+  const double MAXIMUM_DEVIATION_FROM_PATH = 2.0;
+  const double MAXIMUM_ALLOWED_TIME_OFF_TRACK = 1.0;
+  const double MAXIMUM_OVERSHOOT = 0.2;
+  const double MAXIMUM_ALLOWED_TIME_OVERSHOOT = 1.0;
+  const double NEAR_GOAL_SLOWDOWN_DISTANCE = 4.0;
+  const double PROJECTION_TIME = 0.1;
 
   double desired_linear_vel_, base_desired_linear_vel_;
   double lookahead_dist_;
@@ -259,11 +284,14 @@ protected:
   double rotate_to_heading_min_angle_;
   double goal_dist_tol_;
   bool allow_reversing_;
+  std::chrono::system_clock::time_point reset_speed_ramp_ts_;
+  std::chrono::system_clock::time_point last_on_track_ts_;
+  std::chrono::system_clock::time_point last_no_overshoot_ts_;
 
   nav_msgs::msg::Path global_plan_;
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>> global_path_pub_;
-  std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PointStamped>>
-  carrot_pub_;
+  std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PointStamped>> carrot_pub_;
+  std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PointStamped>> closest_pub_;
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>> carrot_arc_pub_;
 };
 
