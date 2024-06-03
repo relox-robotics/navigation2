@@ -16,30 +16,29 @@
 #ifndef NAV2_SMAC_PLANNER__A_STAR_HPP_
 #define NAV2_SMAC_PLANNER__A_STAR_HPP_
 
-#include <vector>
 #include <iostream>
-#include <unordered_map>
 #include <memory>
 #include <queue>
+#include <unordered_map>
 #include <utility>
+#include <vector>
+
 #include "Eigen/Core"
-
 #include "nav2_costmap_2d/costmap_2d.hpp"
-
-#include "nav2_smac_planner/node_2d.hpp"
-#include "nav2_smac_planner/node_hybrid.hpp"
-#include "nav2_smac_planner/node_basic.hpp"
-#include "nav2_smac_planner/types.hpp"
+#include "nav2_smac_planner/analytic_expansion.hpp"
 #include "nav2_smac_planner/constants.hpp"
+#include "nav2_smac_planner/node_2d.hpp"
+#include "nav2_smac_planner/node_basic.hpp"
+#include "nav2_smac_planner/node_hybrid.hpp"
+#include "nav2_smac_planner/types.hpp"
 
 namespace nav2_smac_planner
 {
-
 /**
  * @class nav2_smac_planner::AStarAlgorithm
  * @brief An A* implementation for planning in a costmap. Templated based on the Node type.
  */
-template<typename NodeT>
+template <typename NodeT>
 class AStarAlgorithm
 {
 public:
@@ -50,28 +49,7 @@ public:
   typedef typename NodeT::Coordinates Coordinates;
   typedef typename NodeT::CoordinateVector CoordinateVector;
   typedef typename NodeVector::iterator NeighborIterator;
-  typedef std::function<bool (const unsigned int &, NodeT * &)> NodeGetter;
-
-  /**
-   * @struct nav2_smac_planner::AnalyticExpansionNodes
-   * @brief Analytic expansion nodes and associated metadata
-   */
-
-  struct AnalyticExpansionNode
-  {
-    AnalyticExpansionNode(
-      NodePtr & node_in,
-      Coordinates & initial_coords_in,
-      Coordinates & proposed_coords_in)
-    : node(node_in), initial_coords(initial_coords_in), proposed_coords(proposed_coords_in)
-    {}
-
-    NodePtr node;
-    Coordinates initial_coords;
-    Coordinates proposed_coords;
-  };
-
-  typedef std::vector<AnalyticExpansionNode> AnalyticExpansionNodes;
+  typedef std::function<bool(const unsigned int &, NodeT *&)> NodeGetter;
 
   /**
    * @struct nav2_smac_planner::NodeComparator
@@ -105,12 +83,12 @@ public:
    * @param max_on_approach_iterations Maximum number of iterations before returning a valid
    * path once within thresholds to refine path
    * comes at more compute time but smoother paths.
+   * @param max_planning_time Maximum time (in seconds) to wait for a plan, createPath returns
+   * false after this timeout
    */
   void initialize(
-    const bool & allow_unknown,
-    int & max_iterations,
-    const int & max_on_approach_iterations,
-    const float & lookup_table_size,
+    const bool & allow_unknown, int & max_iterations, const int & max_on_approach_iterations,
+    const double & max_planning_time, const float & lookup_table_size,
     const unsigned int & dim_3_size);
 
   /**
@@ -135,9 +113,8 @@ public:
    * @param dim_3 The node dim_3 index of the goal
    */
   void setGoal(
-    const unsigned int & mx,
-    const unsigned int & my,
-    const unsigned int & dim_3);
+    const unsigned int & mx, const unsigned int & my, const unsigned int & dim_3,
+    const double & cmx, const double & cmy, const double & cdim_3);
 
   /**
    * @brief Set the starting pose for planning, as a node index
@@ -146,9 +123,8 @@ public:
    * @param dim_3 The node dim_3 index of the goal
    */
   void setStart(
-    const unsigned int & mx,
-    const unsigned int & my,
-    const unsigned int & dim_3);
+    const unsigned int & mx, const unsigned int & my, const unsigned int & dim_3,
+    const double & cmx, const double & cmy, const double & cdim_3);
 
   /**
    * @brief Get maximum number of iterations to plan
@@ -227,14 +203,6 @@ protected:
   inline bool isGoal(NodePtr & node);
 
   /**
-   * @brief Set the starting pose for planning, as a node index
-   * @param node Node pointer to the goal node to backtrace
-   * @param path Reference to a vector of indicies of generated path
-   * @return whether the path was able to be backtraced
-   */
-  bool backtracePath(NodePtr node, CoordinateVector & path);
-
-  /**
    * @brief Get cost of heuristic of node
    * @param node Node index current
    * @param node Node index of new
@@ -258,34 +226,12 @@ protected:
    */
   inline void clearGraph();
 
-  /**
-   * @brief Attempt an analytic path completion
-   * @return Node pointer reference to goal node if successful, else
-   * return nullptr
-   */
-  NodePtr tryAnalyticExpansion(
-    const NodePtr & current_node,
-    const NodeGetter & getter, int & iterations, int & best_cost);
-
-  /**
-   * @brief Perform an analytic path expansion to the goal
-   * @param node The node to start the analytic path from
-   * @param getter The function object that gets valid nodes from the graph
-   * @return A set of analytically expanded nodes to the goal from current node, if possible
-   */
-  AnalyticExpansionNodes getAnalyticPath(const NodePtr & node, const NodeGetter & getter);
-
-  /**
-   * @brief Takes final analytic expansion and appends to current expanded node
-   * @param node The node to start the analytic path from
-   * @param expanded_nodes Expanded nodes to append to end of current search path
-   * @return Node pointer to goal node if successful, else return nullptr
-   */
-  NodePtr setAnalyticPath(const NodePtr & node, const AnalyticExpansionNodes & expanded_nodes);
+  int _timing_interval = 5000;
 
   bool _traverse_unknown;
   int _max_iterations;
   int _max_on_approach_iterations;
+  double _max_planning_time;
   float _tolerance;
   unsigned int _x_size;
   unsigned int _y_size;
@@ -304,6 +250,7 @@ protected:
 
   GridCollisionChecker * _collision_checker;
   nav2_costmap_2d::Costmap2D * _costmap;
+  std::unique_ptr<AnalyticExpansion<NodeT>> _expander;
 };
 
 }  // namespace nav2_smac_planner

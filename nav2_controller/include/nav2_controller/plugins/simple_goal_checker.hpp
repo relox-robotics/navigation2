@@ -78,6 +78,9 @@ protected:
   rclcpp::Subscription<rcl_interfaces::msg::ParameterEvent>::SharedPtr parameter_event_sub_;
   std::string plugin_name_;
 
+  // Make sure we are outside the tolerance of the goal before we enter inside the tolerance
+  bool has_left_goal_;
+
   /**
    * @brief Callback executed when a paramter change is detected
    * @param event ParameterEvent message

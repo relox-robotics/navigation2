@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License. Reserved.
 
-#include <string>
-#include <memory>
-#include <vector>
+#include "nav2_smac_planner/smac_planner_hybrid.hpp"
+
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "Eigen/Core"
-#include "nav2_smac_planner/smac_planner_hybrid.hpp"
 
 // #define BENCHMARK_TESTING
 
 namespace nav2_smac_planner
 {
-
 using namespace std::chrono;  // NOLINT
 using rcl_interfaces::msg::ParameterType;
 using std::placeholders::_1;
@@ -41,14 +41,12 @@ SmacPlannerHybrid::SmacPlannerHybrid()
 
 SmacPlannerHybrid::~SmacPlannerHybrid()
 {
-  RCLCPP_INFO(
-    _logger, "Destroying plugin %s of type SmacPlannerHybrid",
-    _name.c_str());
+  RCLCPP_INFO(_logger, "Destroying plugin %s of type SmacPlannerHybrid", _name.c_str());
 }
 
 void SmacPlannerHybrid::configure(
-  const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
-  std::string name, std::shared_ptr<tf2_ros::Buffer>/*tf*/,
+  const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent, std::string name,
+  std::shared_ptr<tf2_ros::Buffer> /*tf*/,
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
 {
   _node = parent;
@@ -60,7 +58,11 @@ void SmacPlannerHybrid::configure(
   _name = name;
   _global_frame = costmap_ros->getGlobalFrameID();
 
+  RCLCPP_INFO(_logger, "Configuring %s of type SmacPlannerHybrid", name.c_str());
+
   int angle_quantizations;
+  double analytic_expansion_max_length_m;
+  bool smooth_path;
 
   // General planner params
   nav2_util::declare_parameter_if_not_declared(
@@ -82,10 +84,13 @@ void SmacPlannerHybrid::configure(
   nav2_util::declare_parameter_if_not_declared(
     node, name + ".max_iterations", rclcpp::ParameterValue(1000000));
   node->get_parameter(name + ".max_iterations", _max_iterations);
+  nav2_util::declare_parameter_if_not_declared(
+    node, name + ".smooth_path", rclcpp::ParameterValue(true));
+  node->get_parameter(name + ".smooth_path", smooth_path);
 
   nav2_util::declare_parameter_if_not_declared(
     node, name + ".minimum_turning_radius", rclcpp::ParameterValue(0.4));
-  node->get_parameter(name + ".minimum_turning_radius", _search_info.minimum_turning_radius);
+  node->get_parameter(name + ".minimum_turning_radius", _minimum_turning_radius_global_coords);
   nav2_util::declare_parameter_if_not_declared(
     node, name + ".cache_obstacle_heuristic", rclcpp::ParameterValue(false));
   node->get_parameter(name + ".cache_obstacle_heuristic", _search_info.cache_obstacle_heuristic);
@@ -93,17 +98,25 @@ void SmacPlannerHybrid::configure(
     node, name + ".reverse_penalty", rclcpp::ParameterValue(2.0));
   node->get_parameter(name + ".reverse_penalty", _search_info.reverse_penalty);
   nav2_util::declare_parameter_if_not_declared(
-    node, name + ".change_penalty", rclcpp::ParameterValue(0.15));
+    node, name + ".change_penalty", rclcpp::ParameterValue(0.0));
   node->get_parameter(name + ".change_penalty", _search_info.change_penalty);
   nav2_util::declare_parameter_if_not_declared(
-    node, name + ".non_straight_penalty", rclcpp::ParameterValue(1.50));
+    node, name + ".non_straight_penalty", rclcpp::ParameterValue(1.2));
   node->get_parameter(name + ".non_straight_penalty", _search_info.non_straight_penalty);
   nav2_util::declare_parameter_if_not_declared(
-    node, name + ".cost_penalty", rclcpp::ParameterValue(1.7));
+    node, name + ".cost_penalty", rclcpp::ParameterValue(2.0));
   node->get_parameter(name + ".cost_penalty", _search_info.cost_penalty);
+  nav2_util::declare_parameter_if_not_declared(
+    node, name + ".retrospective_penalty", rclcpp::ParameterValue(0.015));
+  node->get_parameter(name + ".retrospective_penalty", _search_info.retrospective_penalty);
   nav2_util::declare_parameter_if_not_declared(
     node, name + ".analytic_expansion_ratio", rclcpp::ParameterValue(3.5));
   node->get_parameter(name + ".analytic_expansion_ratio", _search_info.analytic_expansion_ratio);
+  nav2_util::declare_parameter_if_not_declared(
+    node, name + ".analytic_expansion_max_length", rclcpp::ParameterValue(3.0));
+  node->get_parameter(name + ".analytic_expansion_max_length", analytic_expansion_max_length_m);
+  _search_info.analytic_expansion_max_length =
+    analytic_expansion_max_length_m / _costmap->getResolution();
 
   nav2_util::declare_parameter_if_not_declared(
     node, name + ".max_planning_time", rclcpp::ParameterValue(5.0));
@@ -126,7 +139,8 @@ void SmacPlannerHybrid::configure(
 
   if (_max_iterations <= 0) {
     RCLCPP_INFO(
-      _logger, "maximum iteration selected as <= 0, "
+      _logger,
+      "maximum iteration selected as <= 0, "
       "disabling maximum iterations.");
     _max_iterations = std::numeric_limits<int>::max();
   }
@@ -135,12 +149,10 @@ void SmacPlannerHybrid::configure(
   if (!_downsample_costmap) {
     _downsampling_factor = 1;
   }
-  const double minimum_turning_radius_global_coords = _search_info.minimum_turning_radius;
   _search_info.minimum_turning_radius =
-    _search_info.minimum_turning_radius / (_costmap->getResolution() * _downsampling_factor);
-  _lookup_table_dim =
-    static_cast<float>(_lookup_table_size) /
-    static_cast<float>(_costmap->getResolution() * _downsampling_factor);
+    _minimum_turning_radius_global_coords / (_costmap->getResolution() * _downsampling_factor);
+  _lookup_table_dim = static_cast<float>(_lookup_table_size) /
+                      static_cast<float>(_costmap->getResolution() * _downsampling_factor);
 
   // Make sure its a whole number
   _lookup_table_dim = static_cast<float>(static_cast<int>(_lookup_table_dim));
@@ -148,8 +160,7 @@ void SmacPlannerHybrid::configure(
   // Make sure its an odd number
   if (static_cast<int>(_lookup_table_dim) % 2 == 0) {
     RCLCPP_INFO(
-      _logger,
-      "Even sized heuristic lookup table size set %f, increasing size by 1 to make odd",
+      _logger, "Even sized heuristic lookup table size set %f, increasing size by 1 to make odd",
       _lookup_table_dim);
     _lookup_table_dim += 1.0;
   }
@@ -157,24 +168,22 @@ void SmacPlannerHybrid::configure(
   // Initialize collision checker
   _collision_checker = GridCollisionChecker(_costmap, _angle_quantizations);
   _collision_checker.setFootprint(
-    _costmap_ros->getRobotFootprint(),
-    _costmap_ros->getUseRadius(),
+    _costmap_ros->getRobotFootprint(), _costmap_ros->getUseRadius(),
     findCircumscribedCost(_costmap_ros));
 
   // Initialize A* template
   _a_star = std::make_unique<AStarAlgorithm<NodeHybrid>>(_motion_model, _search_info);
   _a_star->initialize(
-    _allow_unknown,
-    _max_iterations,
-    std::numeric_limits<int>::max(),
-    _lookup_table_dim,
+    _allow_unknown, _max_iterations, 1000, _max_planning_time, _lookup_table_dim,
     _angle_quantizations);
 
   // Initialize path smoother
-  SmootherParams params;
-  params.get(node, name);
-  _smoother = std::make_unique<Smoother>(params);
-  _smoother->initialize(minimum_turning_radius_global_coords);
+  if (smooth_path) {
+    SmootherParams params;
+    params.get(node, name);
+    _smoother = std::make_unique<Smoother>(params);
+    _smoother->initialize(_minimum_turning_radius_global_coords);
+  }
 
   // Initialize costmap downsampler
   if (_downsample_costmap && _downsampling_factor > 1) {
@@ -186,18 +195,9 @@ void SmacPlannerHybrid::configure(
 
   _raw_plan_publisher = node->create_publisher<nav_msgs::msg::Path>("unsmoothed_plan", 1);
 
-  // Setup callback for changes to parameters.
-  _parameters_client = std::make_shared<rclcpp::AsyncParametersClient>(
-    node->get_node_base_interface(),
-    node->get_node_topics_interface(),
-    node->get_node_graph_interface(),
-    node->get_node_services_interface());
-
-  _parameter_event_sub = _parameters_client->on_parameter_event(
-    std::bind(&SmacPlannerHybrid::on_parameter_event_callback, this, _1));
-
   RCLCPP_INFO(
-    _logger, "Configured plugin %s of type SmacPlannerHybrid with "
+    _logger,
+    "Configured plugin %s of type SmacPlannerHybrid with "
     "maximum iterations %i, and %s. Using motion model: %s.",
     _name.c_str(), _max_iterations,
     _allow_unknown ? "allowing unknown traversal" : "not allowing unknown traversal",
@@ -206,31 +206,30 @@ void SmacPlannerHybrid::configure(
 
 void SmacPlannerHybrid::activate()
 {
-  RCLCPP_INFO(
-    _logger, "Activating plugin %s of type SmacPlannerHybrid",
-    _name.c_str());
+  RCLCPP_INFO(_logger, "Activating plugin %s of type SmacPlannerHybrid", _name.c_str());
   _raw_plan_publisher->on_activate();
   if (_costmap_downsampler) {
     _costmap_downsampler->on_activate();
   }
+  auto node = _node.lock();
+  // Add callback for dynamic parameters
+  _dyn_params_handler = node->add_on_set_parameters_callback(
+    std::bind(&SmacPlannerHybrid::dynamicParametersCallback, this, _1));
 }
 
 void SmacPlannerHybrid::deactivate()
 {
-  RCLCPP_INFO(
-    _logger, "Deactivating plugin %s of type SmacPlannerHybrid",
-    _name.c_str());
+  RCLCPP_INFO(_logger, "Deactivating plugin %s of type SmacPlannerHybrid", _name.c_str());
   _raw_plan_publisher->on_deactivate();
   if (_costmap_downsampler) {
     _costmap_downsampler->on_deactivate();
   }
+  _dyn_params_handler.reset();
 }
 
 void SmacPlannerHybrid::cleanup()
 {
-  RCLCPP_INFO(
-    _logger, "Cleaning up plugin %s of type SmacPlannerHybrid",
-    _name.c_str());
+  RCLCPP_INFO(_logger, "Cleaning up plugin %s of type SmacPlannerHybrid", _name.c_str());
   _a_star.reset();
   _smoother.reset();
   if (_costmap_downsampler) {
@@ -241,8 +240,7 @@ void SmacPlannerHybrid::cleanup()
 }
 
 nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
-  const geometry_msgs::msg::PoseStamped & start,
-  const geometry_msgs::msg::PoseStamped & goal)
+  const geometry_msgs::msg::PoseStamped & start, const geometry_msgs::msg::PoseStamped & goal)
 {
   std::lock_guard<std::mutex> lock_reinit(_mutex);
   steady_clock::time_point a = steady_clock::now();
@@ -271,7 +269,28 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
     orientation_bin -= static_cast<float>(_angle_quantizations);
   }
   unsigned int orientation_bin_id = static_cast<unsigned int>(floor(orientation_bin));
-  _a_star->setStart(mx, my, orientation_bin_id);
+
+  float start_yaw = tf2::getYaw(start.pose.orientation);
+  if (start_yaw < 0.0) {
+    start_yaw += 2.0 * M_PI;
+  }
+  if (start_yaw >= 2.0 * M_PI) {
+    start_yaw -= 2.0 * M_PI;
+  }
+
+  // std::cout << "\n\nstart.pose.position.x = " << start.pose.position.x
+  //           << ", start.pose.position.y = " << start.pose.position.y << "\n\n"
+  //           << std::endl;
+  // std::cout << "\n\ngoal.pose.position.x = " << goal.pose.position.x
+  //           << ", goal.pose.position.y = " << goal.pose.position.y << "\n\n"
+  //           << std::endl;
+
+  auto map_pose_start = getMapCoords(start.pose.position.x, start.pose.position.y, costmap);
+  // std::cout << "\n\nSTART: map_pose_start.position.x = " << map_pose_start.position.x
+  //           << ", map_pose_start.position.y = " << map_pose_start.position.y << "\n\n"
+  //           << std::endl;
+  _a_star->setStart(
+    mx, my, orientation_bin_id, map_pose_start.position.x, map_pose_start.position.y, start_yaw);
 
   // Set goal point, in A* bin search coordinates
   costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, mx, my);
@@ -284,7 +303,21 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
     orientation_bin -= static_cast<float>(_angle_quantizations);
   }
   orientation_bin_id = static_cast<unsigned int>(floor(orientation_bin));
-  _a_star->setGoal(mx, my, orientation_bin_id);
+
+  float goal_yaw = tf2::getYaw(goal.pose.orientation);
+  if (goal_yaw < 0.0) {
+    goal_yaw += 2.0 * M_PI;
+  }
+  if (goal_yaw >= 2.0 * M_PI) {
+    goal_yaw -= 2.0 * M_PI;
+  }
+
+  auto map_pose_goal = getMapCoords(goal.pose.position.x, goal.pose.position.y, costmap);
+  // std::cout << "\n\nGOAL: map_pose_goal.position.x = " << map_pose_goal.position.x
+  //           << ", map_pose_goal.position.y = " << map_pose_goal.position.y << "\n\n"
+  //           << std::endl;
+  _a_star->setGoal(
+    mx, my, orientation_bin_id, map_pose_goal.position.x, map_pose_goal.position.y, goal_yaw);
 
   // Setup message
   nav_msgs::msg::Path plan;
@@ -303,7 +336,7 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
   int num_iterations = 0;
   std::string error;
   try {
-    if (!_a_star->createPath(path, num_iterations, 0.0)) {
+    if (!_a_star->createPath(path, num_iterations, 5.0)) {
       if (num_iterations < _a_star->getMaxIterations()) {
         error = std::string("no valid path found");
       } else {
@@ -316,20 +349,27 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
   }
 
   if (!error.empty()) {
-    RCLCPP_WARN(
-      _logger,
-      "%s: failed to create plan, %s.",
-      _name.c_str(), error.c_str());
+    RCLCPP_WARN(_logger, "%s: failed to create plan, %s.", _name.c_str(), error.c_str());
     return plan;
   }
+
+  // std::cout << "path front -> x: " << path.front().x << "y: " << path.front().y
+  //           << "yaw: " << path.front().theta << std::endl;
 
   // Convert to world coordinates
   plan.poses.reserve(path.size());
   for (int i = path.size() - 1; i >= 0; --i) {
     pose.pose = getWorldCoords(path[i].x, path[i].y, costmap);
-    pose.pose.orientation = getWorldOrientation(path[i].theta, _angle_bin_size);
+    pose.pose.orientation = getWorldOrientation(path[i].theta);
     plan.poses.push_back(pose);
   }
+
+  // std::cout << "plan back -> x: " << plan.poses.back().pose.position.x
+  //           << "y: " << plan.poses.back().pose.position.y
+  //           << "yaw: " << tf2::getYaw(plan.poses.back().pose.orientation) << std::endl;
+
+  // std::cout << "original -> x: " << goal.pose.position.x << "y: " << goal.pose.position.y
+  //           << "yaw: " << tf2::getYaw(goal.pose.orientation) << std::endl;
 
   // Publish raw path for debug
   if (_raw_plan_publisher->get_subscription_count() > 0) {
@@ -342,28 +382,29 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
   double time_remaining = _max_planning_time - static_cast<double>(time_span.count());
 
 #ifdef BENCHMARK_TESTING
-  std::cout << "It took " << time_span.count() * 1000 <<
-    " milliseconds with " << num_iterations << " iterations." << std::endl;
+  std::cout << "It took " << time_span.count() * 1000 << " milliseconds with " << num_iterations
+            << " iterations." << std::endl;
 #endif
 
   // Smooth plan
-  if (num_iterations > 1 && plan.poses.size() > 6) {
+  if (_smoother && num_iterations > 1) {
     _smoother->smooth(plan, costmap, time_remaining);
   }
 
 #ifdef BENCHMARK_TESTING
   steady_clock::time_point c = steady_clock::now();
   duration<double> time_span2 = duration_cast<duration<double>>(c - b);
-  std::cout << "It took " << time_span2.count() * 1000 <<
-    " milliseconds to smooth path." << std::endl;
+  std::cout << "It took " << time_span2.count() * 1000 << " milliseconds to smooth path."
+            << std::endl;
 #endif
 
   return plan;
 }
 
-void SmacPlannerHybrid::on_parameter_event_callback(
-  const rcl_interfaces::msg::ParameterEvent::SharedPtr event)
+rcl_interfaces::msg::SetParametersResult SmacPlannerHybrid::dynamicParametersCallback(
+  std::vector<rclcpp::Parameter> parameters)
 {
+  rcl_interfaces::msg::SetParametersResult result;
   std::lock_guard<std::mutex> lock_reinit(_mutex);
 
   bool reinit_collision_checker = false;
@@ -371,73 +412,86 @@ void SmacPlannerHybrid::on_parameter_event_callback(
   bool reinit_downsampler = false;
   bool reinit_smoother = false;
 
-  for (auto & changed_parameter : event->changed_parameters) {
-    const auto & type = changed_parameter.value.type;
-    const auto & name = changed_parameter.name;
-    const auto & value = changed_parameter.value;
+  for (auto parameter : parameters) {
+    const auto & type = parameter.get_type();
+    const auto & name = parameter.get_name();
 
     if (type == ParameterType::PARAMETER_DOUBLE) {
       if (name == _name + ".max_planning_time") {
-        _max_planning_time = value.double_value;
+        reinit_a_star = true;
+        _max_planning_time = parameter.as_double();
       } else if (name == _name + ".lookup_table_size") {
         reinit_a_star = true;
-        _lookup_table_size = value.double_value;
+        _lookup_table_size = parameter.as_double();
       } else if (name == _name + ".minimum_turning_radius") {
         reinit_a_star = true;
-        reinit_smoother = true;
-        _search_info.minimum_turning_radius = static_cast<float>(value.double_value);
+        if (_smoother) {
+          reinit_smoother = true;
+        }
+        _minimum_turning_radius_global_coords = static_cast<float>(parameter.as_double());
       } else if (name == _name + ".reverse_penalty") {
         reinit_a_star = true;
-        _search_info.reverse_penalty = static_cast<float>(value.double_value);
+        _search_info.reverse_penalty = static_cast<float>(parameter.as_double());
       } else if (name == _name + ".change_penalty") {
         reinit_a_star = true;
-        _search_info.change_penalty = static_cast<float>(value.double_value);
+        _search_info.change_penalty = static_cast<float>(parameter.as_double());
       } else if (name == _name + ".non_straight_penalty") {
         reinit_a_star = true;
-        _search_info.non_straight_penalty = static_cast<float>(value.double_value);
+        _search_info.non_straight_penalty = static_cast<float>(parameter.as_double());
       } else if (name == _name + ".cost_penalty") {
         reinit_a_star = true;
-        _search_info.cost_penalty = static_cast<float>(value.double_value);
+        _search_info.cost_penalty = static_cast<float>(parameter.as_double());
       } else if (name == _name + ".analytic_expansion_ratio") {
         reinit_a_star = true;
-        _search_info.analytic_expansion_ratio = static_cast<float>(value.double_value);
+        _search_info.analytic_expansion_ratio = static_cast<float>(parameter.as_double());
+      } else if (name == _name + ".analytic_expansion_max_length") {
+        reinit_a_star = true;
+        _search_info.analytic_expansion_max_length =
+          static_cast<float>(parameter.as_double()) / _costmap->getResolution();
       }
     } else if (type == ParameterType::PARAMETER_BOOL) {
       if (name == _name + ".downsample_costmap") {
         reinit_downsampler = true;
-        _downsample_costmap = value.bool_value;
+        _downsample_costmap = parameter.as_bool();
       } else if (name == _name + ".allow_unknown") {
         reinit_a_star = true;
-        _allow_unknown = value.bool_value;
+        _allow_unknown = parameter.as_bool();
       } else if (name == _name + ".cache_obstacle_heuristic") {
         reinit_a_star = true;
-        _search_info.cache_obstacle_heuristic = value.bool_value;
+        _search_info.cache_obstacle_heuristic = parameter.as_bool();
+      } else if (name == _name + ".smooth_path") {
+        if (parameter.as_bool()) {
+          reinit_smoother = true;
+        } else {
+          _smoother.reset();
+        }
       }
     } else if (type == ParameterType::PARAMETER_INTEGER) {
       if (name == _name + ".downsampling_factor") {
         reinit_a_star = true;
         reinit_downsampler = true;
-        _downsampling_factor = value.integer_value;
+        _downsampling_factor = parameter.as_int();
       } else if (name == _name + ".max_iterations") {
         reinit_a_star = true;
-        _max_iterations = value.integer_value;
+        _max_iterations = parameter.as_int();
         if (_max_iterations <= 0) {
           RCLCPP_INFO(
-            _logger, "maximum iteration selected as <= 0, "
+            _logger,
+            "maximum iteration selected as <= 0, "
             "disabling maximum iterations.");
           _max_iterations = std::numeric_limits<int>::max();
         }
       } else if (name == _name + ".angle_quantization_bins") {
         reinit_collision_checker = true;
         reinit_a_star = true;
-        int angle_quantizations = value.integer_value;
+        int angle_quantizations = parameter.as_int();
         _angle_bin_size = 2.0 * M_PI / angle_quantizations;
         _angle_quantizations = static_cast<unsigned int>(angle_quantizations);
       }
     } else if (type == ParameterType::PARAMETER_STRING) {
       if (name == _name + ".motion_model_for_search") {
         reinit_a_star = true;
-        _motion_model = fromString(value.string_value);
+        _motion_model = fromString(parameter.as_string());
         if (_motion_model == MotionModel::UNKNOWN) {
           RCLCPP_WARN(
             _logger,
@@ -455,12 +509,10 @@ void SmacPlannerHybrid::on_parameter_event_callback(
     if (!_downsample_costmap) {
       _downsampling_factor = 1;
     }
-    const double minimum_turning_radius_global_coords = _search_info.minimum_turning_radius;
     _search_info.minimum_turning_radius =
-      _search_info.minimum_turning_radius / (_costmap->getResolution() * _downsampling_factor);
-    _lookup_table_dim =
-      static_cast<float>(_lookup_table_size) /
-      static_cast<float>(_costmap->getResolution() * _downsampling_factor);
+      _minimum_turning_radius_global_coords / (_costmap->getResolution() * _downsampling_factor);
+    _lookup_table_dim = static_cast<float>(_lookup_table_size) /
+                        static_cast<float>(_costmap->getResolution() * _downsampling_factor);
 
     // Make sure its a whole number
     _lookup_table_dim = static_cast<float>(static_cast<int>(_lookup_table_dim));
@@ -468,8 +520,7 @@ void SmacPlannerHybrid::on_parameter_event_callback(
     // Make sure its an odd number
     if (static_cast<int>(_lookup_table_dim) % 2 == 0) {
       RCLCPP_INFO(
-        _logger,
-        "Even sized heuristic lookup table size set %f, increasing size by 1 to make odd",
+        _logger, "Even sized heuristic lookup table size set %f, increasing size by 1 to make odd",
         _lookup_table_dim);
       _lookup_table_dim += 1.0;
     }
@@ -478,10 +529,7 @@ void SmacPlannerHybrid::on_parameter_event_callback(
     if (reinit_a_star) {
       _a_star = std::make_unique<AStarAlgorithm<NodeHybrid>>(_motion_model, _search_info);
       _a_star->initialize(
-        _allow_unknown,
-        _max_iterations,
-        std::numeric_limits<int>::max(),
-        _lookup_table_dim,
+        _allow_unknown, _max_iterations, 1000, _max_planning_time, _lookup_table_dim,
         _angle_quantizations);
     }
 
@@ -500,8 +548,7 @@ void SmacPlannerHybrid::on_parameter_event_callback(
     if (reinit_collision_checker) {
       _collision_checker = GridCollisionChecker(_costmap, _angle_quantizations);
       _collision_checker.setFootprint(
-        _costmap_ros->getRobotFootprint(),
-        _costmap_ros->getUseRadius(),
+        _costmap_ros->getRobotFootprint(), _costmap_ros->getUseRadius(),
         findCircumscribedCost(_costmap_ros));
     }
 
@@ -511,9 +558,11 @@ void SmacPlannerHybrid::on_parameter_event_callback(
       SmootherParams params;
       params.get(node, _name);
       _smoother = std::make_unique<Smoother>(params);
-      _smoother->initialize(minimum_turning_radius_global_coords);
+      _smoother->initialize(_minimum_turning_radius_global_coords);
     }
   }
+  result.successful = true;
+  return result;
 }
 
 }  // namespace nav2_smac_planner

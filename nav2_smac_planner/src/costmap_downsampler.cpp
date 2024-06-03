@@ -15,38 +15,32 @@
 
 #include "nav2_smac_planner/costmap_downsampler.hpp"
 
-#include <string>
-#include <memory>
 #include <algorithm>
+#include <memory>
+#include <string>
 
 namespace nav2_smac_planner
 {
-
 CostmapDownsampler::CostmapDownsampler()
-: _costmap(nullptr),
-  _downsampled_costmap(nullptr),
-  _downsampled_costmap_pub(nullptr)
+: _costmap(nullptr), _downsampled_costmap(nullptr), _downsampled_costmap_pub(nullptr)
 {
 }
 
-CostmapDownsampler::~CostmapDownsampler()
-{
-}
+CostmapDownsampler::~CostmapDownsampler() {}
 
 void CostmapDownsampler::on_configure(
-  const nav2_util::LifecycleNode::WeakPtr & node,
-  const std::string & global_frame,
-  const std::string & topic_name,
-  nav2_costmap_2d::Costmap2D * const costmap,
-  const unsigned int & downsampling_factor)
+  const nav2_util::LifecycleNode::WeakPtr & node, const std::string & global_frame,
+  const std::string & topic_name, nav2_costmap_2d::Costmap2D * const costmap,
+  const unsigned int & downsampling_factor, const bool & use_min_cost_neighbor)
 {
   _costmap = costmap;
   _downsampling_factor = downsampling_factor;
+  _use_min_cost_neighbor = use_min_cost_neighbor;
   updateCostmapSize();
 
   _downsampled_costmap = std::make_unique<nav2_costmap_2d::Costmap2D>(
-    _downsampled_size_x, _downsampled_size_y, _downsampled_resolution,
-    _costmap->getOriginX(), _costmap->getOriginY(), UNKNOWN);
+    _downsampled_size_x, _downsampled_size_y, _downsampled_resolution, _costmap->getOriginX(),
+    _costmap->getOriginY(), UNKNOWN);
 
   if (!node.expired()) {
     _downsampled_costmap_pub = std::make_unique<nav2_costmap_2d::Costmap2DPublisher>(
@@ -82,10 +76,10 @@ nav2_costmap_2d::Costmap2D * CostmapDownsampler::downsample(
   updateCostmapSize();
 
   // Adjust costmap size if needed
-  if (_downsampled_costmap->getSizeInCellsX() != _downsampled_size_x ||
+  if (
+    _downsampled_costmap->getSizeInCellsX() != _downsampled_size_x ||
     _downsampled_costmap->getSizeInCellsY() != _downsampled_size_y ||
-    _downsampled_costmap->getResolution() != _downsampled_resolution)
-  {
+    _downsampled_costmap->getResolution() != _downsampled_resolution) {
     resizeCostmap();
   }
 
@@ -114,19 +108,14 @@ void CostmapDownsampler::updateCostmapSize()
 void CostmapDownsampler::resizeCostmap()
 {
   _downsampled_costmap->resizeMap(
-    _downsampled_size_x,
-    _downsampled_size_y,
-    _downsampled_resolution,
-    _costmap->getOriginX(),
+    _downsampled_size_x, _downsampled_size_y, _downsampled_resolution, _costmap->getOriginX(),
     _costmap->getOriginY());
 }
 
-void CostmapDownsampler::setCostOfCell(
-  const unsigned int & new_mx,
-  const unsigned int & new_my)
+void CostmapDownsampler::setCostOfCell(const unsigned int & new_mx, const unsigned int & new_my)
 {
   unsigned int mx, my;
-  unsigned char cost = 0;
+  unsigned char cost = _use_min_cost_neighbor ? 255 : 0;
   unsigned int x_offset = new_mx * _downsampling_factor;
   unsigned int y_offset = new_my * _downsampling_factor;
 
@@ -140,7 +129,8 @@ void CostmapDownsampler::setCostOfCell(
       if (my >= _size_y) {
         continue;
       }
-      cost = std::max(cost, _costmap->getCost(mx, my));
+      cost = _use_min_cost_neighbor ? std::min(cost, _costmap->getCost(mx, my))
+                                    : std::max(cost, _costmap->getCost(mx, my));
     }
   }
 
