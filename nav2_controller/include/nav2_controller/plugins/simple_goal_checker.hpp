@@ -80,6 +80,9 @@ protected:
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr dyn_params_handler_;
   std::string plugin_name_;
 
+  // Make sure we are outside the tolerance of the goal before we enter inside the tolerance
+  bool has_left_goal_;
+
   /**
    * @brief Callback executed when a paramter change is detected
    * @param parameters list of changed parameters

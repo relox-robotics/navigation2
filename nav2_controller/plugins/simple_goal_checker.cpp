@@ -56,8 +56,9 @@ SimpleGoalChecker::SimpleGoalChecker()
 : xy_goal_tolerance_(0.25),
   yaw_goal_tolerance_(0.25),
   stateful_(true),
-  check_xy_(true),
-  xy_goal_tolerance_sq_(0.0625)
+  check_xy_(true), 
+  xy_goal_tolerance_sq_(0.0625),
+  has_left_goal_{false}
 {
 }
 
@@ -93,28 +94,37 @@ void SimpleGoalChecker::initialize(
 void SimpleGoalChecker::reset()
 {
   check_xy_ = true;
+  has_left_goal_ = false;
 }
 
 bool SimpleGoalChecker::isGoalReached(
   const geometry_msgs::msg::Pose & query_pose, const geometry_msgs::msg::Pose & goal_pose,
   const geometry_msgs::msg::Twist &)
 {
-  if (check_xy_) {
+  if (has_left_goal_ == false) {
     double dx = query_pose.position.x - goal_pose.position.x,
-      dy = query_pose.position.y - goal_pose.position.y;
+           dy = query_pose.position.y - goal_pose.position.y;
     if (dx * dx + dy * dy > xy_goal_tolerance_sq_) {
-      return false;
+      has_left_goal_ = true;
     }
-    // We are within the window
-    // If we are stateful, change the state.
-    if (stateful_) {
-      check_xy_ = false;
+    return false;
+  } else {
+    if (check_xy_) {
+      double dx = query_pose.position.x - goal_pose.position.x,
+             dy = query_pose.position.y - goal_pose.position.y;
+      if (dx * dx + dy * dy > xy_goal_tolerance_sq_) {
+        return false;
+      }
+      // We are within the window
+      // If we are stateful, change the state.
+      if (stateful_) {
+        check_xy_ = false;
+      }
     }
+    double dyaw = angles::shortest_angular_distance(
+      tf2::getYaw(query_pose.orientation), tf2::getYaw(goal_pose.orientation));
+    return fabs(dyaw) < yaw_goal_tolerance_;
   }
-  double dyaw = angles::shortest_angular_distance(
-    tf2::getYaw(query_pose.orientation),
-    tf2::getYaw(goal_pose.orientation));
-  return fabs(dyaw) < yaw_goal_tolerance_;
 }
 
 bool SimpleGoalChecker::getTolerances(

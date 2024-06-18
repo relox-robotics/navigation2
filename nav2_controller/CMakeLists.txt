@@ -14,6 +14,7 @@ find_package(nav2_msgs REQUIRED)
 find_package(nav_2d_utils REQUIRED)
 find_package(nav_2d_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(diagnostic_updater REQUIRED)
 
 nav2_package()
 
@@ -45,6 +46,7 @@ set(dependencies
   nav2_util
   nav2_core
   pluginlib
+  diagnostic_updater
 )
 
 add_library(simple_progress_checker SHARED plugins/simple_progress_checker.cpp)

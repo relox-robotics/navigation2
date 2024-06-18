@@ -44,7 +44,9 @@ ControllerServer::ControllerServer(const rclcpp::NodeOptions & options)
   default_goal_checker_types_{"nav2_controller::SimpleGoalChecker"},
   lp_loader_("nav2_core", "nav2_core::Controller"),
   default_ids_{"FollowPath"},
-  default_types_{"dwb_core::DWBLocalPlanner"}
+  default_types_{"dwb_core::DWBLocalPlanner"},
+  diagnostics_updater_(new diagnostic_updater::Updater(this, 0.5)),
+  controller_frequency_trigger_(0)
 {
   RCLCPP_INFO(get_logger(), "Creating controller server");
 
@@ -74,10 +76,29 @@ ControllerServer::~ControllerServer()
   costmap_thread_.reset();
 }
 
+void ControllerServer::init_diagnostic_updater_()
+{
+  diagnostics_updater_->setHardwareID("nav2_controller");
+  diagnostics_updater_->add("Nav2 Rate Low", this, &ControllerServer::check_rate);
+  diagnostics_updater_->broadcast(
+    diagnostic_msgs::msg::DiagnosticStatus::WARN, "No data in nav2 monitor yet");
+}
+
+void ControllerServer::check_rate(diagnostic_updater::DiagnosticStatusWrapper & status)
+{
+  if (controller_frequency_trigger_ >= CONTROLLER_FREQUENCY_TRIGGER_THRESHOLD) {
+    status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Nav2 multiple rate misses");
+  } else {
+    status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nav2 rate OK");
+  }
+}
+
 nav2_util::CallbackReturn
 ControllerServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 {
   auto node = shared_from_this();
+
+  init_diagnostic_updater_();
 
   RCLCPP_INFO(get_logger(), "Configuring controller interface");
 
@@ -209,6 +230,10 @@ ControllerServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     speed_limit_topic, rclcpp::QoS(10),
     std::bind(&ControllerServer::speedLimitCallback, this, std::placeholders::_1));
 
+  pause_controller_sub_ = create_subscription<std_msgs::msg::Bool>(
+    "/pause_controller", rclcpp::QoS(10),
+    std::bind(&ControllerServer::pauseControllerCallback, this, std::placeholders::_1));
+
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
@@ -289,6 +314,7 @@ ControllerServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   costmap_thread_.reset();
   vel_publisher_.reset();
   speed_limit_sub_.reset();
+  pause_controller_sub_.reset();
 
   return nav2_util::CallbackReturn::SUCCESS;
 }
@@ -365,6 +391,7 @@ void ControllerServer::computeControl()
       current_controller_ = current_controller;
     } else {
       action_server_->terminate_current();
+      controller_frequency_trigger_ = 0;
       return;
     }
 
@@ -374,6 +401,7 @@ void ControllerServer::computeControl()
       current_goal_checker_ = current_goal_checker;
     } else {
       action_server_->terminate_current();
+      controller_frequency_trigger_ = 0;
       return;
     }
 
@@ -385,6 +413,7 @@ void ControllerServer::computeControl()
     while (rclcpp::ok()) {
       if (action_server_ == nullptr || !action_server_->is_server_active()) {
         RCLCPP_DEBUG(get_logger(), "Action server unavailable or inactive. Stopping.");
+        controller_frequency_trigger_ = 0;
         return;
       }
 
@@ -392,6 +421,7 @@ void ControllerServer::computeControl()
         RCLCPP_INFO(get_logger(), "Goal was canceled. Stopping the robot.");
         action_server_->terminate_all();
         publishZeroVelocity();
+        controller_frequency_trigger_ = 0;
         return;
       }
 
@@ -411,10 +441,24 @@ void ControllerServer::computeControl()
       }
 
       if (!loop_rate.sleep()) {
-        RCLCPP_WARN(
-          get_logger(), "Control loop missed its desired rate of %.4fHz",
-          controller_frequency_);
+        controller_frequency_trigger_ += 4;
+        auto & clk = *this->get_clock();
+        if (controller_frequency_trigger_ >= CONTROLLER_FREQUENCY_TRIGGER_THRESHOLD) {
+          RCLCPP_ERROR_THROTTLE(
+            get_logger(), clk, 1000, "Control loop missed its desired rate of %.4fHz",
+            controller_frequency_);
+        } else {
+          RCLCPP_WARN(
+            get_logger(), "Control loop missed its desired rate of %.4fHz", controller_frequency_);
+        }
+      } else {
+        controller_frequency_trigger_ -= 1;
       }
+
+      // Cap the trigger counter so that it doesn't go negative or become to large
+      controller_frequency_trigger_ = std::min(
+        std::max(controller_frequency_trigger_, 0),
+        static_cast<int>(CONTROLLER_FREQUENCY_TRIGGER_THRESHOLD * 1.5));
     }
   } catch (nav2_core::PlannerException & e) {
     RCLCPP_ERROR(this->get_logger(), "%s", e.what());
@@ -435,6 +479,7 @@ void ControllerServer::computeControl()
 
   // TODO(orduno) #861 Handle a pending preemption and set controller name
   action_server_->succeeded_current();
+  controller_frequency_trigger_ = 0;
 }
 
 void ControllerServer::setPlannerPath(const nav_msgs::msg::Path & path)
@@ -460,46 +505,61 @@ void ControllerServer::setPlannerPath(const nav_msgs::msg::Path & path)
 
 void ControllerServer::computeAndPublishVelocity()
 {
+  geometry_msgs::msg::TwistStamped cmd_vel_2d;
   geometry_msgs::msg::PoseStamped pose;
 
   if (!getRobotPose(pose)) {
     throw nav2_core::PlannerException("Failed to obtain robot pose");
   }
 
-  if (!progress_checker_->check(pose)) {
-    throw nav2_core::PlannerException("Failed to make progress");
-  }
-
-  nav_2d_msgs::msg::Twist2D twist = getThresholdedTwist(odom_sub_->getTwist());
-
-  geometry_msgs::msg::TwistStamped cmd_vel_2d;
-
-  try {
-    cmd_vel_2d =
-      controllers_[current_controller_]->computeVelocityCommands(
-      pose,
-      nav_2d_utils::twist2Dto3D(twist),
-      goal_checkers_[current_goal_checker_].get());
-    last_valid_cmd_time_ = now();
-  } catch (nav2_core::PlannerException & e) {
-    if (failure_tolerance_ > 0 || failure_tolerance_ == -1.0) {
-      RCLCPP_WARN(this->get_logger(), "%s", e.what());
-      cmd_vel_2d.twist.angular.x = 0;
-      cmd_vel_2d.twist.angular.y = 0;
-      cmd_vel_2d.twist.angular.z = 0;
-      cmd_vel_2d.twist.linear.x = 0;
-      cmd_vel_2d.twist.linear.y = 0;
-      cmd_vel_2d.twist.linear.z = 0;
-      cmd_vel_2d.header.frame_id = costmap_ros_->getBaseFrameID();
-      cmd_vel_2d.header.stamp = now();
-      if ((now() - last_valid_cmd_time_).seconds() > failure_tolerance_ &&
-        failure_tolerance_ != -1.0)
-      {
-        throw nav2_core::PlannerException("Controller patience exceeded");
-      }
-    } else {
-      throw nav2_core::PlannerException(e.what());
+  if (!is_pause_controller_) {
+    if (!progress_checker_->check(pose)) {
+      throw nav2_core::PlannerException("Failed to make progress");
     }
+
+    nav_2d_msgs::msg::Twist2D twist = getThresholdedTwist(odom_sub_->getTwist());
+
+    try {
+      cmd_vel_2d =
+        controllers_[current_controller_]->computeVelocityCommands(
+        pose,
+        nav_2d_utils::twist2Dto3D(twist),
+        goal_checkers_[current_goal_checker_].get());
+      last_valid_cmd_time_ = now();
+    } catch (nav2_core::PlannerException & e) {
+      if (failure_tolerance_ > 0 || failure_tolerance_ == -1.0) {
+        RCLCPP_WARN(this->get_logger(), e.what());
+        cmd_vel_2d.twist.angular.x = 0;
+        cmd_vel_2d.twist.angular.y = 0;
+        cmd_vel_2d.twist.angular.z = 0;
+        cmd_vel_2d.twist.linear.x = 0;
+        cmd_vel_2d.twist.linear.y = 0;
+        cmd_vel_2d.twist.linear.z = 0;
+        cmd_vel_2d.header.frame_id = costmap_ros_->getBaseFrameID();
+        cmd_vel_2d.header.stamp = now();
+        if ((now() - last_valid_cmd_time_).seconds() > failure_tolerance_ &&
+          failure_tolerance_ != -1.0)
+        {
+          throw nav2_core::PlannerException("Controller patience exceeded");
+        }
+      } else {
+        throw nav2_core::PlannerException(e.what());
+      }
+    }
+  } else {
+    // Pause navigation
+    progress_checker_->reset();
+    last_valid_cmd_time_ = now();
+    cmd_vel_2d.twist.angular.x = 0;
+    cmd_vel_2d.twist.angular.y = 0;
+    cmd_vel_2d.twist.angular.z = 0;
+    cmd_vel_2d.twist.linear.x = 0;
+    cmd_vel_2d.twist.linear.y = 0;
+    cmd_vel_2d.twist.linear.z = 0;
+    cmd_vel_2d.header.frame_id = costmap_ros_->getBaseFrameID();
+    cmd_vel_2d.header.stamp = now();
+    // Setting the speed limit to -1 is an ugly hack to reset speed ramp in pure pursuit
+    controllers_[current_controller_]->setSpeedLimit(-1.0, false);
   }
 
   std::shared_ptr<Action::Feedback> feedback = std::make_shared<Action::Feedback>();
@@ -665,6 +725,11 @@ ControllerServer::dynamicParametersCallback(std::vector<rclcpp::Parameter> param
 
   result.successful = true;
   return result;
+}
+
+void ControllerServer::pauseControllerCallback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  is_pause_controller_ = msg->data;
 }
 
 }  // namespace nav2_controller
