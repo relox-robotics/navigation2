@@ -63,7 +63,7 @@ Note: The maximum allowed time to collision is thresholded by the lookahead poin
 | `min_approach_linear_velocity` | The minimum velocity threshold to apply when approaching the goal | 
 | `approach_velocity_scaling_dist` | Integrated distance from end of transformed path at which to start applying velocity scaling. This defaults to the forward extent of the costmap minus one costmap cell length. | 
 | `use_collision_detection` | Whether to enable collision detection. |
-| `max_allowed_time_to_collision_up_to_carrot` | The time to project a velocity command to check for collisions when `use_collision_detection` is `true`. It is limited to maximum distance of lookahead distance selected. |
+| `max_allowed_time_to_collision` | The time to project a velocity command to check for collisions when `use_collision_detection` is `true`. It is limited to maximum distance of lookahead distance selected. |
 | `use_regulated_linear_velocity_scaling` | Whether to use the regulated features for curvature | 
 | `use_cost_regulated_linear_velocity_scaling` | Whether to use the regulated features for proximity to obstacles | 
 | `cost_scaling_dist` | The minimum distance from an obstacle to trigger the scaling of linear velocity, if `use_cost_regulated_linear_velocity_scaling` is enabled. The value set should be smaller or equal to the `inflation_radius` set in the inflation layer of costmap, since inflation is used to compute the distance from obstacles | 
@@ -113,7 +113,7 @@ controller_server:
       min_approach_linear_velocity: 0.05
       approach_velocity_scaling_dist: 1.0
       use_collision_detection: true
-      max_allowed_time_to_collision_up_to_carrot: 1.0
+      max_allowed_time_to_collision: 1.0
       use_regulated_linear_velocity_scaling: true
       use_cost_regulated_linear_velocity_scaling: false
       regulated_linear_scaling_min_radius: 0.9
@@ -133,7 +133,7 @@ controller_server:
 | Topic  | Type | Description | 
 |-----|----|----|
 | `lookahead_point`  | `geometry_msgs/PointStamped` | The current lookahead point on the path | 
-| `lookahead_arc`  | `nav_msgs/Path` | The drivable arc between the robot and the carrot. Arc length depends on `max_allowed_time_to_collision_up_to_carrot`, forward simulating from the robot pose at the commanded `Twist` by that time. In a collision state, the last published arc will be the points leading up to, and including, the first point in collision. | 
+| `lookahead_arc`  | `nav_msgs/Path` | The drivable arc between the robot and the carrot. Arc length depends on `max_allowed_time_to_collision`, forward simulating from the robot pose at the commanded `Twist` by that time. In a collision state, the last published arc will be the points leading up to, and including, the first point in collision. | 
 
 Note: The `lookahead_arc` is also a really great speed indicator, when "full" to carrot or max time, you know you're at full speed. If 20% less, you can tell the robot is approximately 20% below maximum speed. Think of it as the collision checking bounds but also a speed guage.
 
