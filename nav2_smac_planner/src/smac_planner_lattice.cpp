@@ -262,14 +262,14 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
   unsigned int mx, my;
   _costmap->worldToMap(start.pose.position.x, start.pose.position.y, mx, my);
   _a_star->setStart(
-    mx, my,
-    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(start.pose.orientation)));
+    mx, my, NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(start.pose.orientation)),
+    0.0, 0.0, 0.0);
 
   // Set goal point, in A* bin search coordinates
   _costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, mx, my);
   _a_star->setGoal(
-    mx, my,
-    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(goal.pose.orientation)));
+    mx, my, NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(goal.pose.orientation)),
+    0.0, 0.0, 0.0);
 
   // Setup message
   nav_msgs::msg::Path plan;

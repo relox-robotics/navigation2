@@ -205,6 +205,13 @@ public:
     pose = pose_in;
   }
 
+  // NOTE: If the start node is the same as the goal node we need to save the start pose
+  // separatly. Then the start pose will be in goal->pose_start and the goal will be in goal->pose.
+  inline void setPoseStart(const Coordinates & pose_in)
+  {
+    pose_start = pose_in;
+  }
+
   /**
    * @brief Reset method for new search
    */
@@ -438,8 +445,15 @@ public:
    */
   bool backtracePath(CoordinateVector & path);
 
+  bool canGoStraightTo(
+    const NodeHybrid * goal,
+    nav2_costmap_2d::Costmap2D * costmap,
+    GridCollisionChecker * collision_checker);
+
   NodeHybrid * parent;
   Coordinates pose;
+  Coordinates pose_start; // NOTE(erik): This is used if the start and goal coordinates are in
+                         //             the same cell, and we need to differentiate them
 
   // Constants required across all nodes but don't want to allocate more than once
   static double travel_distance_cost;
@@ -453,6 +467,26 @@ public:
   // Dubin / Reeds-Shepp lookup and size for dereferencing
   static LookupTable dist_heuristic_lookup_table;
   static float size_lookup;
+
+  bool is_goal = false; // NOTE(erik): To identify the goal node
+
+  // NOTE(erik): If the goal and start is the same node, we need to keep these values separate
+  float continuous_angle_goal;
+  float continuous_angle_start;
+
+  std::string toString()
+  {
+    return "x: " + std::to_string(pose.x) +
+         ", y: " + std::to_string(pose.y) + 
+         ", z: " + std::to_string(pose.theta) +
+         ", sx: " + std::to_string(pose_start.x) +
+         ", sy: " + std::to_string(pose_start.y) +
+         ", sz: " + std::to_string(pose_start.theta) +
+         ", continuous_angle_start: " + std::to_string(continuous_angle_start) +
+         ", continuous_angle_goal: " + std::to_string(continuous_angle_goal) +
+         ", index: " + std::to_string(_index) + 
+         ", orientation_bin_id: " + std::to_string(_motion_primitive_index);
+  }
 
 private:
   float _cell_cost;

@@ -117,22 +117,34 @@ public:
    * @param mx The node X index of the goal
    * @param my The node Y index of the goal
    * @param dim_3 The node dim_3 index of the goal
+   * @param cmx The non-rounded X of the goal
+   * @param cmy The non-rounded Y of the goal
+   * @param cdim_3 The non-rounded dim_3 of the goal
    */
   void setGoal(
     const unsigned int & mx,
     const unsigned int & my,
-    const unsigned int & dim_3);
+    const unsigned int & dim_3,
+    const double & cmx,
+    const double & cmy,
+    const double & cdim_3);
 
   /**
    * @brief Set the starting pose for planning, as a node index
    * @param mx The node X index of the goal
    * @param my The node Y index of the goal
    * @param dim_3 The node dim_3 index of the goal
+   * @param cmx The non-rounded X of the goal
+   * @param cmy The non-rounded Y of the goal
+   * @param cdim_3 The non-rounded dim_3 of the goal
    */
   void setStart(
     const unsigned int & mx,
     const unsigned int & my,
-    const unsigned int & dim_3);
+    const unsigned int & dim_3,
+    const double & cmx,
+    const double & cmy,
+    const double & cdim_3);
 
   /**
    * @brief Get maximum number of iterations to plan
