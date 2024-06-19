@@ -133,7 +133,10 @@ template<>
 void AStarAlgorithm<Node2D>::setStart(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy,
+  const double & cdim_3)
 {
   if (dim_3 != 0) {
     throw std::runtime_error("Node type Node2D cannot be given non-zero starting dim 3.");
@@ -141,11 +144,38 @@ void AStarAlgorithm<Node2D>::setStart(
   _start = addToGraph(Node2D::getIndex(mx, my, getSizeX()));
 }
 
+template<>
+void AStarAlgorithm<NodeHybrid>::setStart(
+  const unsigned int & mx,
+  const unsigned int & my,
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy,
+  const double & cdim_3)
+{
+  _start = addToGraph(NodeHybrid::getIndex(mx, my, dim_3));
+  _start->setPose(
+    Coordinates(
+      static_cast<float>(cmx),
+      static_cast<float>(cmy),
+      static_cast<float>(dim_3)));
+  _start->setPoseStart(
+    Coordinates(
+      static_cast<float>(cmx),
+      static_cast<float>(cmy),
+      static_cast<float>(dim_3)));
+  _start->continuous_angle_start = cdim_3;
+  _start->setMotionPrimitiveIndex(0);
+}
+
 template<typename NodeT>
 void AStarAlgorithm<NodeT>::setStart(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy,
+  const double & cdim_3)
 {
   _start = addToGraph(NodeT::getIndex(mx, my, dim_3));
   _start->setPose(
@@ -159,7 +189,10 @@ template<>
 void AStarAlgorithm<Node2D>::setGoal(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy,
+  const double & cdim_3)
 {
   if (dim_3 != 0) {
     throw std::runtime_error("Node type Node2D cannot be given non-zero goal dim 3.");
@@ -169,11 +202,44 @@ void AStarAlgorithm<Node2D>::setGoal(
   _goal_coordinates = Node2D::Coordinates(mx, my);
 }
 
+template<>
+void AStarAlgorithm<NodeHybrid>::setGoal(
+  const unsigned int & mx,
+  const unsigned int & my,
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy,
+  const double & cdim_3)
+{
+  _goal = addToGraph(NodeHybrid::getIndex(mx, my, dim_3));
+
+  typename NodeHybrid::Coordinates goal_coords(
+    static_cast<float>(cmx),
+    static_cast<float>(cmy),
+    static_cast<float>(dim_3));
+
+  if (!_search_info.cache_obstacle_heuristic || goal_coords != _goal_coordinates) {
+    if (!_start) {
+      throw std::runtime_error("Start must be set before goal.");
+    }
+
+    NodeHybrid::resetObstacleHeuristic(_costmap, _start->pose.x, _start->pose.y, mx, my);
+  }
+
+  _goal_coordinates = goal_coords;
+  _goal->setPose(_goal_coordinates);
+  _goal->is_goal = true;
+  _goal->continuous_angle_goal = cdim_3;
+}
+
 template<typename NodeT>
 void AStarAlgorithm<NodeT>::setGoal(
   const unsigned int & mx,
   const unsigned int & my,
-  const unsigned int & dim_3)
+  const unsigned int & dim_3,
+  const double & cmx,
+  const double & cmy,
+  const double & cdim_3)
 {
   _goal = addToGraph(NodeT::getIndex(mx, my, dim_3));
 
@@ -264,6 +330,22 @@ bool AStarAlgorithm<NodeT>::createPath(
       return true;
     };
 
+  //////////////////////////////////////////////////////////////////////////////////////////////
+  // NOTE(erik):
+  // Special case checker that looks if the start and goal pose are exactly in front of each
+  // other. This happens a lot when doing lane coverage at Relox.
+  //////////////////////////////////////////////////////////////////////////////////////////////
+  {
+    auto start = getStart();
+
+    if (start->canGoStraightTo(_goal, _costmap, _collision_checker))
+    {
+      _goal->parent = start;
+      return _goal->backtracePath(path);
+    }
+  }
+  //////////////////////////////////////////////////////////////////////////////////////////////
+
   while (iterations < getMaxIterations() && !_queue.empty()) {
     // Check for planning timeout only on every Nth iteration
     if (iterations % _timing_interval == 0) {
@@ -298,12 +380,16 @@ bool AStarAlgorithm<NodeT>::createPath(
 
     // 3) Check if we're at the goal, backtrace if required
     if (isGoal(current_node)) {
-      return current_node->backtracePath(path);
+      _goal->parent = current_node->parent;
+      _goal->visited();
+      return _goal->backtracePath(path);
     } else if (_best_heuristic_node.first < getToleranceHeuristic()) {
       // Optimization: Let us find when in tolerance and refine within reason
       approach_iterations++;
       if (approach_iterations >= getOnApproachMaxIterations()) {
-        return _graph.at(_best_heuristic_node.second).backtracePath(path);
+        _goal->parent = _graph.at(_best_heuristic_node.second).parent;
+        _goal->visited();
+        return _goal->backtracePath(path);
       }
     }
 

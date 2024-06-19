@@ -408,6 +408,19 @@ public:
    */
   bool backtracePath(CoordinateVector & path);
 
+  bool canGoStraightTo(
+    const NodeLattice * goal,
+    nav2_costmap_2d::Costmap2D * costmap,
+    GridCollisionChecker * collision_checker)
+  {
+    return false;
+  }
+
+  std::string toString()
+  {
+    return std::to_string(_index);
+  }
+
   /**
    * \brief add node to the path
    * \param current_node

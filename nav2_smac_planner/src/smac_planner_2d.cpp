@@ -212,11 +212,11 @@ nav_msgs::msg::Path SmacPlanner2D::createPlan(
   // Set starting point
   unsigned int mx_start, my_start, mx_goal, my_goal;
   costmap->worldToMap(start.pose.position.x, start.pose.position.y, mx_start, my_start);
-  _a_star->setStart(mx_start, my_start, 0);
+  _a_star->setStart(mx_start, my_start, 0, 0.0, 0.0, 0.0);
 
   // Set goal point
   costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, mx_goal, my_goal);
-  _a_star->setGoal(mx_goal, my_goal, 0);
+  _a_star->setGoal(mx_goal, my_goal, 0, 0.0, 0.0, 0.0);
 
   // Setup message
   nav_msgs::msg::Path plan;

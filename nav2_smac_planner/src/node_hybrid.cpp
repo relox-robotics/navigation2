@@ -262,6 +262,10 @@ float HybridMotionTable::getAngleFromBin(const unsigned int & bin_idx)
 NodeHybrid::NodeHybrid(const unsigned int index)
 : parent(nullptr),
   pose(0.0f, 0.0f, 0.0f),
+  pose_start(0.0f, 0.0f, 0.0f),
+  continuous_angle_start(0.0f),
+  continuous_angle_goal(0.0f),
+  is_goal(false),
   _cell_cost(std::numeric_limits<float>::quiet_NaN()),
   _accumulated_cost(std::numeric_limits<float>::max()),
   _index(index),
@@ -680,19 +684,27 @@ void NodeHybrid::getNeighbors(
       motion_table.size_x, motion_table.num_angle_quantization);
 
     if (NeighborGetter(index, neighbor) && !neighbor->wasVisited()) {
-      // Cache the initial pose in case it was visited but valid
-      // don't want to disrupt continuous coordinate expansion
-      initial_node_coords = neighbor->pose;
-      neighbor->setPose(
-        Coordinates(
-          motion_projections[i]._x,
-          motion_projections[i]._y,
-          motion_projections[i]._theta));
-      if (neighbor->isNodeValid(traverse_unknown, collision_checker)) {
-        neighbor->setMotionPrimitiveIndex(i);
-        neighbors.push_back(neighbor);
+
+      if (neighbor->is_goal) {
+        if (neighbor->isNodeValid(traverse_unknown, collision_checker)) {
+          neighbor->setMotionPrimitiveIndex(i);
+          neighbors.push_back(neighbor);
+        }
       } else {
-        neighbor->setPose(initial_node_coords);
+        // Cache the initial pose in case it was visited but valid
+        // don't want to disrupt continuous coordinate expansion
+        initial_node_coords = neighbor->pose;
+        neighbor->setPose(
+          Coordinates(
+            motion_projections[i]._x,
+            motion_projections[i]._y,
+            motion_projections[i]._theta));
+        if (neighbor->isNodeValid(traverse_unknown, collision_checker)) {
+          neighbor->setMotionPrimitiveIndex(i);
+          neighbors.push_back(neighbor);
+        } else {
+          neighbor->setPose(initial_node_coords);
+        }
       }
     }
   }
@@ -704,9 +716,13 @@ bool NodeHybrid::backtracePath(CoordinateVector & path)
     return false;
   }
 
-  NodePtr current_node = this;
+  // goal
+  path.push_back(this->pose);
+  path.back().theta = this->continuous_angle_goal;
 
-  while (current_node->parent) {
+  NodePtr current_node = this->parent;
+
+  while (current_node->parent && current_node->parent != current_node) {
     path.push_back(current_node->pose);
     // Convert angle to radians
     path.back().theta = NodeHybrid::motion_table.getAngleFromBin(path.back().theta);
@@ -714,11 +730,90 @@ bool NodeHybrid::backtracePath(CoordinateVector & path)
   }
 
   // add the start pose
-  path.push_back(current_node->pose);
+  path.push_back(current_node->pose_start);
   // Convert angle to radians
-  path.back().theta = NodeHybrid::motion_table.getAngleFromBin(path.back().theta);
+  path.back().theta = current_node->continuous_angle_start;
 
   return true;
+}
+
+bool NodeHybrid::canGoStraightTo(
+  const NodeHybrid * goal,
+  nav2_costmap_2d::Costmap2D * costmap,
+  GridCollisionChecker * collision_checker)
+{
+  auto start = this;
+
+  // https://stackoverflow.com/questions/1878907/how-can-i-find-the-difference-between-two-angles
+  float adiff = start->continuous_angle_start - goal->continuous_angle_goal;
+  float angle_diff_deg = fabs(atan2(sin(adiff), cos(adiff))) * 180.0 / M_PI;
+
+  const double ANGLE_TRESHOLD_DEGREES = 15.0;
+
+  if (angle_diff_deg < ANGLE_TRESHOLD_DEGREES) {
+    float dx = goal->pose.x - start->pose_start.x;
+    float dy = goal->pose.y - start->pose_start.y;
+
+    float l = sqrt(dx * dx + dy * dy);
+
+    // direction vector (length == 1) of start angle rotated 90 degrees counter clockwise (left)
+    float left_dir_x = -sin(start->continuous_angle_start);
+    float left_dir_y = cos(start->continuous_angle_start);
+
+    // dot product of left direction vector and vector to goal
+    float left_dot = (dx / l) * left_dir_x + (dy / l) * left_dir_y;
+
+    // direction vector (length == 1) of start angle (forward)
+    float forward_dir_x = cos(start->continuous_angle_start);
+    float forward_dir_y = sin(start->continuous_angle_start);
+
+    // dot product of forward direction vector and vector to goal
+    float forward_dot = (dx / l) * forward_dir_x + (dy / l) * forward_dir_y;
+
+    const double LEFT_OFFSET_TRESHOLD = 0.2;
+
+    if (fabs(left_dot) < LEFT_OFFSET_TRESHOLD && forward_dot > 0.0) {
+      // We are in a special case where the start and goal pose are exactly in front of each
+      // other and the goal pose is in front of the start pose. We can potentially go straight
+      // to the goal pose, but first we need to check for obstacles in the way.
+
+      // A move of sqrt(2) is guaranteed to be in a new cell
+      static const float sqrt_2 = std::sqrt(2.0);
+      unsigned int num_intervals = std::floor(l / sqrt_2);
+
+      bool ok = true;
+      // its ok to traverse over cost if we are closer than 3 meters
+      const float max_l = 3.0 / costmap->getResolution();
+
+      // Check intermediary poses (non-goal, non-start)
+      for (float i = 1; i < num_intervals; i++) {
+        float ix = start->pose_start.x + dx * (i / num_intervals);
+        float iy = start->pose_start.y + dy * (i / num_intervals);
+
+        if (collision_checker->inCollision(ix, iy, start->pose_start.theta, false)) {
+          // not ok!
+          // std::cout << "IN COLLISION -> NOT OK!!!" << std::endl;
+          ok = false;
+          break;
+        } else {
+          // std::cout << "NOT IN COLLISION!!!" << std::endl;
+          if (collision_checker->getCost() == 0.0 || l < max_l) {
+            // ok!
+            // std::cout << "COST IS ZERO OR l < max_l -> OK!!! l=" << l << std::endl;
+          } else {
+            // not ok!
+            // std::cout << "COST IS HIGH!!! -> NOT OK l=" << l << std::endl;
+            ok = false;
+            break;
+          }
+        }
+      }
+
+      return ok;
+    }
+  }
+
+  return false;
 }
 
 }  // namespace nav2_smac_planner

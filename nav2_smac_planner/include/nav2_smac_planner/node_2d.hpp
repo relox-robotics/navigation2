@@ -267,6 +267,19 @@ public:
    */
   bool backtracePath(CoordinateVector & path);
 
+  bool canGoStraightTo(
+    const Node2D * goal,
+    nav2_costmap_2d::Costmap2D * costmap,
+    GridCollisionChecker * collision_checker)
+  {
+    return false;
+  }
+
+  std::string toString()
+  {
+    return std::to_string(_index);
+  }
+
   Node2D * parent;
   static float cost_travel_multiplier;
   static std::vector<int> _neighbors_grid_offsets;

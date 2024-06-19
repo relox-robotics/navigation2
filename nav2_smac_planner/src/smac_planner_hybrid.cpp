@@ -146,6 +146,7 @@ void SmacPlannerHybrid::configure(
   nav2_util::declare_parameter_if_not_declared(
     node, name + ".motion_model_for_search", rclcpp::ParameterValue(std::string("DUBIN")));
   node->get_parameter(name + ".motion_model_for_search", _motion_model_for_search);
+
   _motion_model = fromString(_motion_model_for_search);
   if (_motion_model == MotionModel::UNKNOWN) {
     RCLCPP_WARN(
@@ -313,7 +314,20 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
   if (orientation_bin >= static_cast<float>(_angle_quantizations)) {
     orientation_bin -= static_cast<float>(_angle_quantizations);
   }
-  _a_star->setStart(mx, my, static_cast<unsigned int>(orientation_bin));
+  unsigned int orientation_bin_id = static_cast<unsigned int>(orientation_bin);
+
+  float start_yaw = tf2::getYaw(start.pose.orientation);
+  if (start_yaw < 0.0) {
+    start_yaw += 2.0 * M_PI;
+  }
+  if (start_yaw >= 2.0 * M_PI) {
+    start_yaw -= 2.0 * M_PI;
+  }
+
+  auto map_pose_start = getMapCoords(start.pose.position.x, start.pose.position.y, costmap);
+
+  _a_star->setStart(mx, my, orientation_bin_id,
+    map_pose_start.position.x, map_pose_start.position.y, start_yaw);
 
   // Set goal point, in A* bin search coordinates
   if (!costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, mx, my)) {
@@ -327,7 +341,19 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
   if (orientation_bin >= static_cast<float>(_angle_quantizations)) {
     orientation_bin -= static_cast<float>(_angle_quantizations);
   }
-  _a_star->setGoal(mx, my, static_cast<unsigned int>(orientation_bin));
+  orientation_bin_id = static_cast<unsigned int>(orientation_bin);
+
+  float goal_yaw = tf2::getYaw(goal.pose.orientation);
+  if (goal_yaw < 0.0) {
+    goal_yaw += 2.0 * M_PI;
+  }
+  if (goal_yaw >= 2.0 * M_PI) {
+    goal_yaw -= 2.0 * M_PI;
+  }
+  auto map_pose_goal = getMapCoords(goal.pose.position.x, goal.pose.position.y, costmap);
+
+  _a_star->setGoal(mx, my, orientation_bin_id,
+    map_pose_goal.position.x, map_pose_goal.position.y, goal_yaw);
 
   // Setup message
   nav_msgs::msg::Path plan;
