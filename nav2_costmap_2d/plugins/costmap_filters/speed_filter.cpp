@@ -240,24 +240,16 @@ void SpeedFilter::process(
     }
   }
 
-  if (speed_limit_ != speed_limit_prev_) {
-    if (speed_limit_ != NO_SPEED_LIMIT) {
-      RCLCPP_DEBUG(logger_, "SpeedFilter: Speed limit is set to %f", speed_limit_);
-    } else {
-      RCLCPP_DEBUG(logger_, "SpeedFilter: Speed limit is set to its default value");
-    }
+  // Forming and publishing new SpeedLimit message
+  std::unique_ptr<nav2_msgs::msg::SpeedLimit> msg =
+    std::make_unique<nav2_msgs::msg::SpeedLimit>();
+  msg->header.frame_id = global_frame_;
+  msg->header.stamp = clock_->now();
+  msg->percentage = percentage_;
+  msg->speed_limit = speed_limit_;
+  speed_limit_pub_->publish(std::move(msg));
 
-    // Forming and publishing new SpeedLimit message
-    std::unique_ptr<nav2_msgs::msg::SpeedLimit> msg =
-      std::make_unique<nav2_msgs::msg::SpeedLimit>();
-    msg->header.frame_id = global_frame_;
-    msg->header.stamp = clock_->now();
-    msg->percentage = percentage_;
-    msg->speed_limit = speed_limit_;
-    speed_limit_pub_->publish(std::move(msg));
-
-    speed_limit_prev_ = speed_limit_;
-  }
+  speed_limit_prev_ = speed_limit_;
 }
 
 void SpeedFilter::resetFilter()
