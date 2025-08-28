@@ -335,6 +335,10 @@ protected:
   std::chrono::system_clock::time_point last_on_track_ts_;
   std::chrono::system_clock::time_point last_no_overshoot_ts_;
 
+  // Optional override for the maximum costmap extent (meters from center)
+  // Will only be used if it is greater than the costmap size
+  double costmap_max_extent_;
+
   nav_msgs::msg::Path global_plan_;
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>> global_path_pub_;
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PointStamped>> carrot_pub_;

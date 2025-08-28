@@ -60,6 +60,7 @@ void RegulatedPurePursuitController::configure(
   double transform_tolerance = 0.1;
   double control_frequency = 20.0;
   goal_dist_tol_ = 0.25;  // reasonable default before first update
+  costmap_max_extent_ = -1.0;
 
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".desired_linear_vel", rclcpp::ParameterValue(0.5));
@@ -118,6 +119,8 @@ void RegulatedPurePursuitController::configure(
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".use_interpolation",
     rclcpp::ParameterValue(true));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".costmap_max_extent", rclcpp::ParameterValue(costmap_max_extent_));
 
   node->get_parameter(plugin_name_ + ".desired_linear_vel", desired_linear_vel_);
   base_desired_linear_vel_ = desired_linear_vel_;
@@ -171,6 +174,7 @@ void RegulatedPurePursuitController::configure(
   node->get_parameter(plugin_name_ + ".max_angular_accel", max_angular_accel_);
   node->get_parameter(plugin_name_ + ".allow_reversing", allow_reversing_);
   node->get_parameter("controller_frequency", control_frequency);
+  node->get_parameter(plugin_name_ + ".costmap_max_extent", costmap_max_extent_);
   node->get_parameter(
     plugin_name_ + ".max_robot_pose_search_dist",
     max_robot_pose_search_dist_);
@@ -1041,6 +1045,9 @@ double RegulatedPurePursuitController::getCostmapMaxExtent() const
 {
   const double max_costmap_dim_meters = std::max(
     costmap_->getSizeInMetersX(), costmap_->getSizeInMetersY());
+  if (costmap_max_extent_ > max_costmap_dim_meters) {
+    return costmap_max_extent_;
+  }
   return max_costmap_dim_meters / 2.0;
 }
 
@@ -1097,6 +1104,8 @@ RegulatedPurePursuitController::dynamicParametersCallback(
         max_angular_accel_ = parameter.as_double();
       } else if (name == plugin_name_ + ".rotate_to_heading_min_angle") {
         rotate_to_heading_min_angle_ = parameter.as_double();
+      } else if (name == plugin_name_ + ".costmap_max_extent") {
+        costmap_max_extent_ = parameter.as_double();
       }
     } else if (type == ParameterType::PARAMETER_BOOL) {
       if (name == plugin_name_ + ".use_velocity_scaled_lookahead_dist") {
