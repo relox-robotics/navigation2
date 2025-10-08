@@ -394,11 +394,34 @@ nav_msgs::msg::Path SmacPlannerHybrid::createPlan(
     return plan;
   }
 
+  // Resample if poses are too far apart
+  NodeHybrid::CoordinateVector resampled_path;
+  resampled_path.reserve(path.size());
+  for (size_t i = 0; i < path.size(); i++) {
+    if (i > 0) {
+      float distance =
+        std::sqrt(std::pow(path[i].x - path[i - 1].x, 2) + std::pow(path[i].y - path[i - 1].y, 2));
+      if (distance < 1.0) {
+        resampled_path.push_back(path[i]);
+      } else {
+        const size_t steps = static_cast<size_t>(distance / 1.0);
+        for (size_t j = 0; j < steps; j++) {
+          NodeHybrid::Coordinates pose;
+          pose.x = path[i - 1].x + (path[i].x - path[i - 1].x) * (j / distance);
+          pose.y = path[i - 1].y + (path[i].y - path[i - 1].y) * (j / distance);
+          pose.theta = path[i - 1].theta + (path[i].theta - path[i - 1].theta) * (j / distance);
+          resampled_path.push_back(pose);
+        }
+        resampled_path.push_back(path[i]);
+      }
+    }
+  }
+
   // Convert to world coordinates
-  plan.poses.reserve(path.size());
-  for (int i = path.size() - 1; i >= 0; --i) {
-    pose.pose = getWorldCoords(path[i].x, path[i].y, costmap);
-    pose.pose.orientation = getWorldOrientation(path[i].theta);
+  plan.poses.reserve(resampled_path.size());
+  for (int i = resampled_path.size() - 1; i >= 0; --i) {
+    pose.pose = getWorldCoords(resampled_path[i].x, resampled_path[i].y, costmap);
+    pose.pose.orientation = getWorldOrientation(resampled_path[i].theta);
     plan.poses.push_back(pose);
   }
 
