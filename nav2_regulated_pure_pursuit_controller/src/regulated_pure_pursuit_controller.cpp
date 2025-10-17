@@ -910,12 +910,8 @@ nav_msgs::msg::Path RegulatedPurePursuitController::transformGlobalPlan(
   // Calculate the distance from the robot to the end of the global plan
   distance_to_goal = euclidean_distance(robot_pose, global_plan_.poses.back());
 
-  // We'll discard points on the plan that are outside the local costmap
-  double max_costmap_extent = getCostmapMaxExtent();
-
-  // auto closest_pose_upper_bound =
-  //   nav2_util::geometry_utils::first_after_integrated_distance(
-  //   global_plan_.poses.begin(), global_plan_.poses.end(), max_robot_pose_search_dist_);
+  auto closest_pose_upper_bound = nav2_util::geometry_utils::first_after_integrated_distance(
+    global_plan_.poses.begin(), global_plan_.poses.end(), max_robot_pose_search_dist_);
 
   // First find the closest pose on the path to the robot
   // bounded by when the path turns around (if it does) so we don't get a pose from a later
@@ -925,24 +921,16 @@ nav_msgs::msg::Path RegulatedPurePursuitController::transformGlobalPlan(
   //   nav2_util::geometry_utils::min_by(
   //   global_plan_.poses.begin(), closest_pose_upper_bound,
 
-  auto last_pose_it = std::min(global_plan_.poses.begin() + 5, global_plan_.poses.end());
-  auto transformation_begin =
-    nav2_util::geometry_utils::min_by(
-    global_plan_.poses.begin(), last_pose_it,
+  auto transformation_begin = nav2_util::geometry_utils::min_by(
+    global_plan_.poses.begin(), closest_pose_upper_bound,
     [&robot_pose](const geometry_msgs::msg::PoseStamped & ps) {
       return euclidean_distance(robot_pose, ps);
     });
 
   // Find points up to max_transform_dist so we only transform them.
   auto transformation_end = std::find_if(
-
-    // transformation_begin, global_plan_.poses.end(),
-    // [&](const auto & pose) {
-    //   return euclidean_distance(pose, robot_pose) > max_costmap_extent;
-
-    transformation_begin + 2, end(global_plan_.poses),
-    [&](const auto & global_plan_pose) {
-      return euclidean_distance(robot_pose, global_plan_pose) > max_costmap_extent;
+    transformation_begin, closest_pose_upper_bound, [&](const auto & global_plan_pose) {
+      return euclidean_distance(robot_pose, global_plan_pose) > max_robot_pose_search_dist_;
     });
 
   // Add the next outside the costmap
