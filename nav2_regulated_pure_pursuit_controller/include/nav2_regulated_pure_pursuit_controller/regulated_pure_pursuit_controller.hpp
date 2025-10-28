@@ -331,6 +331,7 @@ protected:
   bool allow_reversing_;
   double max_robot_pose_search_dist_;
   bool use_interpolation_;
+  double global_plan_lookahead_dist_;
   std::chrono::system_clock::time_point reset_speed_ramp_ts_;
   std::chrono::system_clock::time_point last_on_track_ts_;
   std::chrono::system_clock::time_point last_no_overshoot_ts_;
