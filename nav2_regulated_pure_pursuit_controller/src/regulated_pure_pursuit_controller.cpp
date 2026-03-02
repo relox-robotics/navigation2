@@ -899,9 +899,7 @@ void RegulatedPurePursuitController::resetSpeedRamp()
 }
 
 nav_msgs::msg::Path RegulatedPurePursuitController::transformGlobalPlan(
-  const geometry_msgs::msg::PoseStamped & pose,
-  double & distance_to_goal
-)
+  const geometry_msgs::msg::PoseStamped & pose, double & distance_to_goal)
 {
   if (global_plan_.poses.empty()) {
     throw nav2_core::PlannerException("Received plan with zero length");
@@ -916,74 +914,53 @@ nav_msgs::msg::Path RegulatedPurePursuitController::transformGlobalPlan(
   // Calculate the distance from the robot to the end of the global plan
   distance_to_goal = euclidean_distance(robot_pose, global_plan_.poses.back());
 
-  auto closest_pose_upper_bound = nav2_util::geometry_utils::first_after_integrated_distance(
-    global_plan_.poses.begin(), global_plan_.poses.end(), max_robot_pose_search_dist_);
+  auto transformation_begin = global_plan_.poses.begin();
 
-  // First find the closest pose on the path to the robot
-  // bounded by when the path turns around (if it does) so we don't get a pose from a later
-  // portion of the path
+  // TODO(jackmcmurdo): use the actual turning radius when we migrate this code to our own
+  // controller
+  const float turning_radius = 2.5;
 
-  // auto transformation_begin =
-  //   nav2_util::geometry_utils::min_by(
-  //   global_plan_.poses.begin(), closest_pose_upper_bound,
-
-  auto transformation_begin = nav2_util::geometry_utils::min_by(
-    global_plan_.poses.begin(), closest_pose_upper_bound,
-    [&robot_pose](const geometry_msgs::msg::PoseStamped & ps) {
-      return euclidean_distance(robot_pose, ps);
-    });
-
-  // Find points up to max_transform_dist so we only transform them.
-  auto transformation_end = std::find_if(
-    transformation_begin, closest_pose_upper_bound, [&](const auto & global_plan_pose) {
-      return euclidean_distance(robot_pose, global_plan_pose) > max_robot_pose_search_dist_;
-    });
-
-  // Add the next outside the costmap
-  if (transformation_end < end(global_plan_.poses)) {
-    transformation_end++;
-  }
-
-  // Add the previous outside the costmap
-  if (transformation_begin > begin(global_plan_.poses)) {
-    transformation_begin--;
-  }
+  auto transformation_end = nav2_util::geometry_utils::first_after_integrated_distance(
+    transformation_begin + 1, global_plan_.poses.end(), M_PI * turning_radius);
+  transformation_end = std::min(transformation_end + 1, global_plan_.poses.end());
 
   // Lambda to transform a PoseStamped from global frame to local
   auto transformGlobalPoseToLocal = [&](const auto & global_plan_pose) {
-      geometry_msgs::msg::PoseStamped stamped_pose, transformed_pose;
-      stamped_pose.header.frame_id = global_plan_.header.frame_id;
-      stamped_pose.header.stamp = robot_pose.header.stamp;
-      stamped_pose.pose = global_plan_pose.pose;
-      transformPose(costmap_ros_->getBaseFrameID(), stamped_pose, transformed_pose);
-      transformed_pose.pose.position.z = 0.0;
-      return transformed_pose;
-    };
-  
-  if (global_plan_lookahead_dist_ > 0.0) {
-    auto current_plan_index_ = nav2_util::geometry_utils::first_after_integrated_distance(
-      transformation_begin, global_plan_.poses.end(), global_plan_lookahead_dist_);
-    transformation_end = current_plan_index_;
-  }
+    geometry_msgs::msg::PoseStamped stamped_pose, transformed_pose;
+    stamped_pose.header.frame_id = global_plan_.header.frame_id;
+    stamped_pose.header.stamp = robot_pose.header.stamp;
+    stamped_pose.pose = global_plan_pose.pose;
+    transformPose(costmap_ros_->getBaseFrameID(), stamped_pose, transformed_pose);
+    transformed_pose.pose.position.z = 0.0;
+    return transformed_pose;
+  };
 
   // Transform the near part of the global plan into the robot's frame of reference.
   nav_msgs::msg::Path transformed_plan;
   std::transform(
-    transformation_begin, transformation_end,
-    std::back_inserter(transformed_plan.poses),
+    transformation_begin, transformation_end, std::back_inserter(transformed_plan.poses),
     transformGlobalPoseToLocal);
   transformed_plan.header.frame_id = costmap_ros_->getBaseFrameID();
   transformed_plan.header.stamp = robot_pose.header.stamp;
 
-  // Remove the portion of the global plan that we've already passed so we don't
-  // process it on the next iteration (this is called path pruning)
-  global_plan_.poses.erase(begin(global_plan_.poses), transformation_begin);
+  // check if transformed_plan at index 1 is behind us, then prune index 0 from the global path
+  if (transformed_plan.poses.size() > 1) {
+    const auto & pose_1 = transformed_plan.poses[1].pose.position;
+    if (pose_1.x < 0.0) {
+      global_plan_.poses.erase(global_plan_.poses.begin());
+      RCLCPP_DEBUG(
+        logger_, "Pruning global plan because pose 1 is behind the robot. Remaining plan size: %zu",
+        global_plan_.poses.size());
+    }
+  }
+
   global_path_pub_->publish(transformed_plan);
 
   if (transformed_plan.poses.empty()) {
     throw nav2_core::PlannerException("Resulting plan has 0 poses in it.");
   }
 
+  // return transformed_plan;
   return transformed_plan;
 }
 
